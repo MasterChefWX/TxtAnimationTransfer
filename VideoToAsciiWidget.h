@@ -1,4 +1,3 @@
-
 #ifndef VIDEOTOASCIIWIDGET_H
 #define VIDEOTOASCIIWIDGET_H
 
@@ -15,12 +14,14 @@ QT_BEGIN_NAMESPACE
 class QPushButton;
 class QLabel;
 class QProgressBar;
+class QTimer;
 QT_END_NAMESPACE
 
 class VideoToAsciiWidget : public QWidget {
     Q_OBJECT
 public:
     explicit VideoToAsciiWidget(QWidget* parent = nullptr);
+    ~VideoToAsciiWidget(); // Ìí¼ÓÎö¹¹º¯Êý
 
 private slots:
     void browseVideo();
