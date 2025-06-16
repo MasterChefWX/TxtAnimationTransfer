@@ -5,153 +5,216 @@
 #include <QHBoxLayout>
 #include <QTimer>
 #include <QApplication>
+#include <QDebug>
 #include <opencv2/opencv.hpp>
 
 VideoToAsciiWidget::VideoToAsciiWidget(QWidget* parent) : QWidget(parent) {
-    tempDir = QDir("Temp");
-    asciiDir = QDir("Ascii");
+    // 使用唯一临时目录名避免冲突
+    QString timestamp = QDateTime::currentDateTime().toString("yyyyMMdd_hhmmss");
+    tempDir = QDir("Temp_" + timestamp);
+    asciiDir = QDir("Ascii_" + timestamp);
+
     if (!tempDir.exists()) tempDir.mkpath(".");
     if (!asciiDir.exists()) asciiDir.mkpath(".");
 
     setupUI();
     playTimer = new QTimer(this);
+    playTimer->setTimerType(Qt::PreciseTimer);
     connect(playTimer, &QTimer::timeout, this, &VideoToAsciiWidget::showNextFrame);
+    connect(&conversionWatcher, &QFutureWatcher<void>::finished, this, &VideoToAsciiWidget::conversionCompleted);
 }
 
 VideoToAsciiWidget::~VideoToAsciiWidget() {
+    // 停止所有后台任务
+    if (conversionRunning) {
+        conversionWatcher.cancel();
+        conversionWatcher.waitForFinished();
+    }
+
     if (ffmpegProcess.state() == QProcess::Running) {
         ffmpegProcess.terminate();
         ffmpegProcess.waitForFinished();
     }
+
+    // 清理资源
+    playTimer->stop();
+    delete playTimer;
+
+    // 删除临时目录
+    if (tempDir.exists()) tempDir.removeRecursively();
+    if (asciiDir.exists()) asciiDir.removeRecursively();
 }
 
 void VideoToAsciiWidget::setupUI() {
     QVBoxLayout* layout = new QVBoxLayout;
 
-    browseBtn = new QPushButton("Browse vedios");
-    convertBtn = new QPushButton("Strat to Transfer");
-    playBtn = new QPushButton("Display the Animation");
-    videoPathLabel = new QLabel("Have not select the vedio!");
+    browseBtn = new QPushButton("Browse Video");
+    convertBtn = new QPushButton("Start Conversion");
+    playBtn = new QPushButton("Play Animation");
+    videoPathLabel = new QLabel("No video selected!");
     progressBar = new QProgressBar;
+    progressBar->setRange(0, 100);
     asciiDisplay = new QTextBrowser;
     asciiDisplay->setFont(QFont("Courier", 8));
+    asciiDisplay->setMinimumHeight(300);
 
     connect(browseBtn, &QPushButton::clicked, this, &VideoToAsciiWidget::browseVideo);
     connect(convertBtn, &QPushButton::clicked, this, &VideoToAsciiWidget::startConversion);
     connect(playBtn, &QPushButton::clicked, [this] {
         currentFrame = 0;
-        playTimer->start(5);
+        playTimer->start(33); // ~30 fps
         });
 
-    layout->addWidget(browseBtn);
+    // 禁用播放按钮直到转换完成
+    playBtn->setEnabled(false);
+
+    QHBoxLayout* btnLayout = new QHBoxLayout;
+    btnLayout->addWidget(browseBtn);
+    btnLayout->addWidget(convertBtn);
+    btnLayout->addWidget(playBtn);
+
+    layout->addLayout(btnLayout);
     layout->addWidget(videoPathLabel);
     layout->addWidget(progressBar);
-    layout->addWidget(convertBtn);
-    layout->addWidget(playBtn);
-    layout->addWidget(asciiDisplay);
+    layout->addWidget(asciiDisplay, 1);
     setLayout(layout);
 }
 
 void VideoToAsciiWidget::browseVideo() {
-    videoPath = QFileDialog::getOpenFileName(this, "Select the Vedio", "", "Vedio(*.mp4 *.avi *.mov)");
-    videoPathLabel->setText(videoPath.isEmpty() ? "Have not select the vedio!" : QFileInfo(videoPath).fileName());
+    videoPath = QFileDialog::getOpenFileName(this, "Select Video", "",
+        "Video Files (*.mp4 *.avi *.mov *.mkv)");
+    videoPathLabel->setText(videoPath.isEmpty() ? "No video selected!" : QFileInfo(videoPath).fileName());
+    playBtn->setEnabled(false);
 }
 
 void VideoToAsciiWidget::startConversion() {
     if (videoPath.isEmpty()) {
-        QMessageBox::warning(this, "error", "please select the vedio");
+        QMessageBox::warning(this, "Error", "Please select a video file");
         return;
     }
-    convertBtn->setEnabled(false); // 禁用按钮避免重复点击
+
+    if (conversionRunning) {
+        QMessageBox::warning(this, "Error", "Conversion already in progress");
+        return;
+    }
+
+    convertBtn->setEnabled(false);
     playBtn->setEnabled(false);
+    progressBar->setValue(0);
+    asciiFrames.clear();
+    conversionRunning = true;
+
     convertWithFFmpeg();
 }
 
 void VideoToAsciiWidget::convertWithFFmpeg() {
-    tempDir.removeRecursively();
+    // 清理旧文件
+    if (tempDir.exists()) tempDir.removeRecursively();
     tempDir.mkpath(".");
 
     QStringList args;
-    args << "-i" << videoPath
-        << "-vf" << "fps=30"
+    args << "-y" // 覆盖输出文件
+        << "-i" << videoPath
+        << "-vf" << "fps=30,scale=200:100" // 提前缩小尺寸减少处理量
+        << "-q:v" << "2" // 控制JPEG质量
         << tempDir.filePath("frame_%05d.jpg");
 
     ffmpegProcess.start("ffmpeg", args);
     connect(&ffmpegProcess, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
-        [this](int exitCode, QProcess::ExitStatus) {
-            processFinished(exitCode);
-        });
+        this, &VideoToAsciiWidget::processFinished);
 }
 
 void VideoToAsciiWidget::processFinished(int exitCode) {
     if (exitCode == 0) {
-        generateAsciiFrames();
+        // 使用QtConcurrent在后台线程处理
+        QFuture<void> future = QtConcurrent::run([this]() {
+            generateAsciiFrames();
+            });
+        conversionWatcher.setFuture(future);
     }
     else {
-        QMessageBox::critical(this, "error", "faild");
-        convertBtn->setEnabled(true); // 重新启用按钮
-        playBtn->setEnabled(true);
+        QMessageBox::critical(this, "Error", "FFmpeg processing failed: " + ffmpegProcess.errorString());
+        convertBtn->setEnabled(true);
+        conversionRunning = false;
     }
 }
 
 void VideoToAsciiWidget::generateAsciiFrames() {
-    asciiDir.removeRecursively();
+    if (asciiDir.exists()) asciiDir.removeRecursively();
     asciiDir.mkpath(".");
-    asciiFrames.clear();
 
-    // 按名称排序确保帧顺序正确
     QStringList images = tempDir.entryList({ "*.jpg" }, QDir::Files, QDir::Name);
-    const int total = images.count();
+    totalFrames = images.size();
+    if (totalFrames == 0) return;
 
-    for (int i = 0; i < images.count(); ++i) {
-        // 使用本地编码处理路径
-        QString imagePath = tempDir.filePath(images[i]);
-        cv::Mat image = cv::imread(imagePath.toLocal8Bit().constData(), cv::IMREAD_GRAYSCALE);
+    const char asciiChars[] = "@%#*+=-:. ";
+    const int asciiCharsCount = sizeof(asciiChars) - 1;
+    int processedFrames = 0;
+
+    foreach(const QString & imageName, images) {
+        if (conversionWatcher.isCanceled()) break;
+
+        QString imagePath = tempDir.filePath(imageName);
+        cv::Mat image = cv::imread(imagePath.toStdString(), cv::IMREAD_GRAYSCALE);
+
         if (!image.empty()) {
-            QString ascii = imageToAscii(image);
-            QFile file(asciiDir.filePath(QString("frame_%1.txt").arg(i + 1, 4, 10, QChar('0'))));
+            QString ascii;
+            ascii.reserve((image.cols + 1) * image.rows); // 预分配内存
+
+            for (int y = 0; y < image.rows; ++y) {
+                for (int x = 0; x < image.cols; ++x) {
+                    uchar pixel = image.at<uchar>(y, x);
+                    int index = (pixel * asciiCharsCount) / 256;
+                    ascii += asciiChars[index];
+                }
+                ascii += '\n';
+            }
+
+            asciiFrames.append(ascii);
+            QFile file(asciiDir.filePath(imageName + ".txt"));
             if (file.open(QIODevice::WriteOnly)) {
                 file.write(ascii.toUtf8());
-                asciiFrames << ascii;
             }
         }
-        updateProgress(i + 1, total);
-        QApplication::processEvents(); // 处理事件避免界面冻结
+
+        processedFrames++;
+        int progress = (processedFrames * 100) / totalFrames;
+        QMetaObject::invokeMethod(this, "updateProgress", Qt::QueuedConnection, Q_ARG(int, progress));
     }
-    QMessageBox::information(this, "completed", "success");
-    convertBtn->setEnabled(true);
-    playBtn->setEnabled(true);
 }
 
 QString VideoToAsciiWidget::imageToAscii(const cv::Mat& image) {
-    const char asciiChars[] = "@%#*+=-:. ";
-    const int asciiCharsCount = sizeof(asciiChars) - 1; // 排除终止符
-    cv::Mat resized;
-    cv::resize(image, resized, cv::Size(100, 50));
-
-    QString result;
-    for (int y = 0; y < resized.rows; ++y) {
-        for (int x = 0; x < resized.cols; ++x) {
-            uchar pixel = resized.at<uchar>(y, x);
-            // 修正索引计算防止越界
-            int index = (pixel * asciiCharsCount) / 256;
-            result += asciiChars[index];
-        }
-        result += "\n";
-    }
-    return result;
+    // 已集成到generateAsciiFrames中优化性能
+    return QString();
 }
 
-void VideoToAsciiWidget::updateProgress(int frame, int total) {
-    progressBar->setMaximum(total);
-    progressBar->setValue(frame);
+void VideoToAsciiWidget::updateProgress(int value) {
+    progressBar->setValue(value);
+}
+
+void VideoToAsciiWidget::conversionCompleted() {
+    conversionRunning = false;
+    convertBtn->setEnabled(true);
+    playBtn->setEnabled(!asciiFrames.isEmpty());
+
+    if (!conversionWatcher.isCanceled() && !asciiFrames.isEmpty()) {
+        QMessageBox::information(this, "Completed", "Conversion successful!");
+    }
+    else {
+        QMessageBox::warning(this, "Cancelled", "Conversion was cancelled");
+    }
 }
 
 void VideoToAsciiWidget::showNextFrame() {
-    if (currentFrame < asciiFrames.count()) {
-        asciiDisplay->setPlainText(asciiFrames[currentFrame++]);
-    }
-    else {
+    if (asciiFrames.isEmpty()) {
         playTimer->stop();
+        return;
     }
+
+    if (currentFrame >= asciiFrames.size()) {
+        currentFrame = 0;
+    }
+
+    asciiDisplay->setPlainText(asciiFrames[currentFrame]);
+    currentFrame++;
 }

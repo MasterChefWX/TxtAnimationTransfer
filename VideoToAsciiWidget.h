@@ -8,7 +8,9 @@
 #include <QPushButton>  
 #include <QLabel>  
 #include <QProgressBar>
-#include<opencv2/opencv.hpp>
+#include <QFutureWatcher>
+#include <QtConcurrent/QtConcurrent>
+#include <opencv2/opencv.hpp>
 
 QT_BEGIN_NAMESPACE
 class QPushButton;
@@ -21,14 +23,15 @@ class VideoToAsciiWidget : public QWidget {
     Q_OBJECT
 public:
     explicit VideoToAsciiWidget(QWidget* parent = nullptr);
-    ~VideoToAsciiWidget(); // Ìí¼ÓÎö¹¹º¯Êý
+    ~VideoToAsciiWidget();
 
 private slots:
     void browseVideo();
     void startConversion();
-    void updateProgress(int frame, int total);
+    void updateProgress(int value);
     void showNextFrame();
     void processFinished(int exitCode);
+    void conversionCompleted();
 
 private:
     void setupUI();
@@ -50,5 +53,8 @@ private:
     QStringList asciiFrames;
     int currentFrame = 0;
     QTimer* playTimer;
+    int totalFrames = 0;
+    QFutureWatcher<void> conversionWatcher;
+    bool conversionRunning = false;
 };
 #endif
