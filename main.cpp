@@ -6,6 +6,7 @@ int main(int argc, char* argv[]) {
 
     // 设置OpenCV优化
     cv::setUseOptimized(true);
+	// 设置OpenCV线程数
     cv::setNumThreads(QThread::idealThreadCount());
 
     VideoToAsciiWidget w;
