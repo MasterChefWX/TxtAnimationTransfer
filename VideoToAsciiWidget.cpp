@@ -49,16 +49,22 @@ VideoToAsciiWidget::~VideoToAsciiWidget() {
 void VideoToAsciiWidget::setupUI() {
     QVBoxLayout* layout = new QVBoxLayout;
 
+    // 创建控制面板
     browseBtn = new QPushButton("Browse Video");
     convertBtn = new QPushButton("Start Conversion");
     playBtn = new QPushButton("Play Animation");
     videoPathLabel = new QLabel("No video selected!");
+
+    //进度条
     progressBar = new QProgressBar;
     progressBar->setRange(0, 100);
+
+	//ASCII显示区域
     asciiDisplay = new QTextBrowser;
     asciiDisplay->setFont(QFont("Courier", 8));
     asciiDisplay->setMinimumHeight(300);
 
+    // 连接信号槽
     connect(browseBtn, &QPushButton::clicked, this, &VideoToAsciiWidget::browseVideo);
     connect(convertBtn, &QPushButton::clicked, this, &VideoToAsciiWidget::startConversion);
     connect(playBtn, &QPushButton::clicked, [this] {
