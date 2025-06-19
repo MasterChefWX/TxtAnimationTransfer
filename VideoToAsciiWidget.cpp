@@ -74,7 +74,7 @@ void VideoToAsciiWidget::setupUI() {
 
     // 分辨率选项，可选择是否降低分辨率以提高播放流畅度
     reduceResolutionCheck = new QCheckBox("Reduce resolution for smoother playback");
-    reduceResolutionCheck->setChecked(true);
+	reduceResolutionCheck->setChecked(true); // 默认选中，降低分辨率以提高播放流畅度
     controlLayout->addWidget(reduceResolutionCheck);
 
     // 帧率控制
